@@ -765,6 +765,10 @@ typedef struct
 
   /* Node index from error code */
   u32 *node_by_error;
+
+  /* benker: Debug internal node calls */
+  u64 benvpp_polling_intfc_calls[VLIB_FRAME_SIZE+2];
+  u64 benvpp_internal_node_calls[VLIB_FRAME_SIZE+2];
 } vlib_node_main_t;
 
 typedef u16 vlib_error_t;

@@ -1206,6 +1206,14 @@ dispatch_node (vlib_main_t * vm,
       if (PREDICT_FALSE (vm->dispatch_pcap_enable))
 	dispatch_pcap_trace (vm, node, frame);
       n = node->function (vm, node, frame);
+      if (dispatch_state == VLIB_NODE_STATE_POLLING && type == VLIB_NODE_TYPE_INPUT)
+      {
+        if (n > VLIB_FRAME_SIZE) {
+          nm->benvpp_polling_intfc_calls[VLIB_FRAME_SIZE+1]++;
+        } else {
+          nm->benvpp_polling_intfc_calls[n]++;
+        }
+      }
     }
 
   t = clib_cpu_time_now ();
@@ -1826,6 +1834,22 @@ vlib_main_or_worker_loop (vlib_main_t * vm, int is_main)
 	      }
 	  }
       }
+
+      /* benker: Debug internal node */
+      for (i = 0; i < _vec_len (nm->pending_frames); i++)
+      {
+          vlib_node_main_t *nm = &vm->node_main;
+          vlib_frame_t *f;
+          vlib_pending_frame_t *p;
+
+          p = nm->pending_frames + i;
+          f = vlib_get_frame (vm, p->frame);
+          if (f->n_vectors > VLIB_FRAME_SIZE) {
+            nm->benvpp_internal_node_calls[VLIB_FRAME_SIZE+1]++;
+          } else {
+            nm->benvpp_internal_node_calls[f->n_vectors]++;
+          }
+      }
       /* Input nodes may have added work to the pending vector.
          Process pending vector until there is nothing left.
          All pending vectors will be processed from input -> output. */
@@ -2018,6 +2042,11 @@ vlib_main (vlib_main_t * volatile vm, unformat_input_t * input)
 {
   clib_error_t *volatile error;
   vlib_node_main_t *nm = &vm->node_main;
+  int i;
+  for (i=0; i<VLIB_FRAME_SIZE+2; i++) {
+    nm->benvpp_polling_intfc_calls[i] = 0;  // benker: initialize to 0
+    nm->benvpp_internal_node_calls[i] = 0;  // benker: initialize to 0
+  }
 
   vm->queue_signal_callback = dummy_queue_signal_callback;
 
@@ -2282,6 +2311,34 @@ vlib_pcap_dispatch_trace_configure (vlib_pcap_dispatch_trace_args_t * a)
 }
 
 static clib_error_t *
+benker_debug_stat_command_fn (vlib_main_t * vm,
+			   unformat_input_t * input, vlib_cli_command_t * cmd)
+{
+  int i;
+  int j;
+  vlib_main_t * th;
+  vlib_worker_thread_barrier_sync(vm);
+  for (j = 0; j < vec_len (vlib_mains); j++)
+	{
+	  th = vlib_mains[j];
+    if (th) {
+      for (i=0; i<VLIB_FRAME_SIZE+2; i++) {
+        if (th->node_main.benvpp_internal_node_calls[i] > 0) {
+          vlib_cli_output (vm, "th[%d]> internal-node schedule: frame-size[%d] -- count:[%d]", j, i, th->node_main.benvpp_internal_node_calls[i]);
+        }
+      }
+      for (i=0; i<VLIB_FRAME_SIZE+2; i++) {
+        if (th->node_main.benvpp_polling_intfc_calls[i] > 0) {
+          vlib_cli_output (vm, "th[%d]> polling-intfc: frame-size[%d] -- count:[%d]", j, i, th->node_main.benvpp_polling_intfc_calls[i]);
+        }
+      }
+    }
+	}
+  vlib_worker_thread_barrier_release(vm);
+  return 0;
+}
+
+static clib_error_t *
 dispatch_trace_command_fn (vlib_main_t * vm,
 			   unformat_input_t * input, vlib_cli_command_t * cmd)
 {
@@ -2428,6 +2485,13 @@ VLIB_CLI_COMMAND (pcap_dispatch_trace_command, static) = {
     .function = dispatch_trace_command_fn,
 };
 /* *INDENT-ON* */
+
+VLIB_CLI_COMMAND (benker_debug_stat_command, static) = {
+    .path = "benker debug stats",
+    .short_help =
+    "benker debug stats, print something helpful",
+    .function = benker_debug_stat_command_fn,
+};
 
 /*
  * fd.io coding-style-patch-verification: ON
